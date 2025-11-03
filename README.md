@@ -3,7 +3,7 @@
 
 This contains everything you need to run your app locally.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1EmhoslDAp-QQ8XhcnKzvYsb9MCiJQ1pZ
+View app in AI Studio: https://ai.studio/apps/drive/1EmhoslDAp-QQ8XhcnKzvYsb9MCiJQ1pZ
 
 # 🎬 Gemini Subtitle Studio
 
