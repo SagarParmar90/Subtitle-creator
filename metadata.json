@@ -1,0 +1,5 @@
+{
+  "name": "Gemini Subtitle Studio",
+  "description": "An AI-powered tool to generate, edit, and export word-level subtitles from audio files. Utilizes the Gemini API for high-accuracy transcription with timestamps, providing a minimalist interface for content creators.",
+  "requestFramePermissions": []
+}

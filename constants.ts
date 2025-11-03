@@ -1,0 +1,17 @@
+export const SUPPORTED_LANGUAGES = [
+    { code: "en-US", name: "English (US)" },
+    { code: "en-GB", name: "English (UK)" },
+    { code: "en-IN", name: "English (India)" },
+    { code: "hi-IN", name: "Hindi" },
+    { code: "gu-IN", name: "Gujarati" },
+    { code: "es-ES", name: "Spanish" },
+    { code: "fr-FR", name: "French" },
+    { code: "de-DE", name: "German" },
+    { code: "it-IT", name: "Italian" },
+    { code: "pt-BR", name: "Portuguese (Brazil)" },
+    { code: "ru-RU", name: "Russian" },
+    { code: "ja-JP", name: "Japanese" },
+    { code: "ko-KR", name: "Korean" },
+    { code: "zh-CN", name: "Chinese (Mandarin)" },
+    { code: "ar-SA", name: "Arabic" },
+];
