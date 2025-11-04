@@ -137,7 +137,7 @@ const App: React.FC = () => {
       <div className="container mx-auto px-4 py-8 md:py-12">
         <header className="flex justify-between items-center mb-8">
             <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white">
-                Gemini <span className="text-primary-600 dark:text-primary-500">Subtitle Studio</span>
+                Subtitle studio by @sagar.parmar.x90
             </h1>
             <DarkModeToggle />
         </header>
@@ -145,7 +145,7 @@ const App: React.FC = () => {
           {renderContent()}
         </main>
         <footer className="text-center mt-12 text-gray-500 dark:text-gray-400 text-sm">
-            <p>Powered by Google Gemini. Built with React & Tailwind CSS.</p>
+            <p>Built with React & Tailwind CSS.</p>
         </footer>
       </div>
     </div>
