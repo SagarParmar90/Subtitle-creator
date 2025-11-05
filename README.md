@@ -247,20 +247,6 @@ Currently, the app processes one file at a time. Batch processing is planned for
 - ✅ Responsive design
 - ✅ No login required
 
-### Planned Features (Coming Soon)
-- 🎥 Video file support (MP4)
-- 📊 Real-time waveform visualization
-- ☁️ Cloud save projects
-- 🎬 Export to captioned MP4
-- 🔗 Google Drive integration
-- 📺 YouTube Studio direct upload
-- 🔄 Batch processing
-- 🎨 Custom subtitle styling
-- 🗣️ Multi-speaker detection
-- 📱 Progressive Web App (PWA)
-- 🌐 More language support
-- ⚡ Faster processing with streaming
-
 ## 📧 Contact
 
 Have questions or suggestions? Feel free to open an issue or reach out!
