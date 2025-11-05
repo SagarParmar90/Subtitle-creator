@@ -6,4 +6,4 @@ export interface SubtitleWord {
 
 export type AppState = 'idle' | 'loading' | 'editing' | 'error';
 
-export type ExportFormat = 'srt' | 'txt' | 'csv';
+export type ExportFormat = 'srt' | 'txt' | 'csv' | 'json' | 'prtranscript';

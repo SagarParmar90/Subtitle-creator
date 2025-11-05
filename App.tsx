@@ -102,7 +102,7 @@ const App: React.FC = () => {
           </div>
         );
       case 'editing':
-        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart}/>;
+        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart} language={language} />;
       case 'idle':
       case 'error':
       default:

@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { SubtitleWord, ExportFormat } from '../types';
+import { transliterateText } from '../services/geminiService';
+import SpinnerIcon from './icons/SpinnerIcon';
 
 interface SubtitleEditorProps {
   initialSubtitles: SubtitleWord[];
   onRestart: () => void;
+  language: string;
 }
 
 const formatTimestamp = (seconds: number, format: 'srt' | 'default'): string => {
@@ -41,8 +44,11 @@ const groupWordsToLines = (words: SubtitleWord[]): { text: string, startTime: nu
 };
 
 
-const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRestart }) => {
+const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRestart, language }) => {
   const [subtitles, setSubtitles] = useState<SubtitleWord[]>(initialSubtitles);
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [hasBeenRomanized, setHasBeenRomanized] = useState<boolean>(false);
+  const [transliterationError, setTransliterationError] = useState<string | null>(null);
 
   useEffect(() => {
     setSubtitles(initialSubtitles);
@@ -52,6 +58,21 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     const updatedSubtitles = [...subtitles];
     updatedSubtitles[index].word = newWord;
     setSubtitles(updatedSubtitles);
+  };
+
+  const handleRomanize = async () => {
+    setIsTranslating(true);
+    setTransliterationError(null);
+    try {
+      const result = await transliterateText(subtitles);
+      setSubtitles(result);
+      setHasBeenRomanized(true);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+      setTransliterationError(`Failed to Romanize: ${errorMessage}`);
+    } finally {
+      setIsTranslating(false);
+    }
   };
   
   const handleDownload = (format: ExportFormat) => {
@@ -74,6 +95,24 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         content += subtitles.map(s => `"${s.word.replace(/"/g, '""')}",${s.startTime.toFixed(3)},${s.endTime.toFixed(3)}`).join('\n');
         mimeType = 'text/csv';
         break;
+      case 'json':
+        content = JSON.stringify(subtitles, null, 2);
+        mimeType = 'application/json';
+        filename = 'subtitles.json';
+        break;
+      case 'prtranscript':
+        const prTranscriptObject = {
+          version: '1.0',
+          'word-level-transcript': subtitles.map(s => ({
+            'start-time': s.startTime,
+            'end-time': s.endTime,
+            word: s.word,
+          })),
+        };
+        content = JSON.stringify(prTranscriptObject, null, 2);
+        mimeType = 'application/json';
+        filename = 'subtitles.prtranscript';
+        break;
     }
 
     const blob = new Blob([content], { type: mimeType });
@@ -87,19 +126,42 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     URL.revokeObjectURL(url);
   };
 
+  const shouldShowRomanizeButton = !language.startsWith('en-');
+
   return (
     <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Edit Subtitles</h2>
-            <div className="flex items-center gap-2">
-                <div className="flex space-x-2">
-                    <button onClick={() => handleDownload('srt')} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800">Export .srt</button>
-                    <button onClick={() => handleDownload('txt')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.txt</button>
-                    <button onClick={() => handleDownload('csv')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.csv</button>
-                </div>
+            <div className="flex flex-wrap justify-end items-center gap-2">
+                {shouldShowRomanizeButton && (
+                    <button
+                        onClick={handleRomanize}
+                        disabled={isTranslating || hasBeenRomanized}
+                        className="flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800"
+                        title={hasBeenRomanized ? "Text has already been Romanized" : "Convert text to English characters (e.g., नमस्ते -> namaste)"}
+                    >
+                        {isTranslating ? (
+                            <>
+                                <SpinnerIcon className="w-4 h-4 mr-2 animate-spin" />
+                                Converting...
+                            </>
+                        ) : 'Romanize'}
+                    </button>
+                )}
+                <button onClick={() => handleDownload('srt')} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800">Export .srt</button>
+                <button onClick={() => handleDownload('txt')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.txt</button>
+                <button onClick={() => handleDownload('csv')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.csv</button>
+                <button onClick={() => handleDownload('json')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.json</button>
+                <button onClick={() => handleDownload('prtranscript')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.prtranscript</button>
                 <button onClick={onRestart} className="px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-300 dark:bg-gray-500 dark:hover:bg-gray-600 dark:focus:ring-gray-800">Start Over</button>
             </div>
         </div>
+
+        {transliterationError && (
+            <div className="mb-4 p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">
+                {transliterationError}
+            </div>
+        )}
 
         <div className="overflow-y-auto h-[60vh] pr-2">
             <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 items-center">
