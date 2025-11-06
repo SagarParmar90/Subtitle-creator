@@ -1,4 +1,4 @@
-# 🎬 Gemini Subtitle Studio
+# 🎬 Subtitle studio by @sagar.parmar.x90
 
 > AI-powered subtitle generation made simple and accessible for all creators
 
