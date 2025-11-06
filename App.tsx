@@ -102,14 +102,14 @@ const App: React.FC = () => {
           </div>
         );
       case 'editing':
-        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart} language={language} />;
+        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart} language={language} audioFile={audioFile!} />;
       case 'idle':
       case 'error':
       default:
         return (
           <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md space-y-6">
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Upload Audio File</h2>
-            {/* FIX: The `disabled` prop is set to false because in this render branch, appState can never be 'loading'. */}
+            {/* FIX: The app state can never be 'loading' in this branch, so the component should not be disabled. */}
             <FileUpload onFileSelect={handleFileSelect} disabled={false} />
             {audioFile && (
               <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
@@ -117,11 +117,11 @@ const App: React.FC = () => {
               </div>
             )}
             {error && <div className="p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">{error}</div>}
-            {/* FIX: The `disabled` prop is set to false because in this render branch, appState can never be 'loading'. */}
+            {/* FIX: The app state can never be 'loading' in this branch, so the component should not be disabled. */}
             <LanguageSelector value={language} onChange={setLanguage} disabled={false} />
             <button
               onClick={handleGenerate}
-              // FIX: Removed redundant `appState === 'loading'` check which is always false in this branch.
+              // FIX: The app state can never be 'loading' here. The button's disabled state should only depend on whether a file is selected.
               disabled={!audioFile}
               className="w-full px-5 py-3 text-base font-medium text-center text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 disabled:bg-primary-300 disabled:cursor-not-allowed dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800 dark:disabled:bg-primary-800"
             >
@@ -135,11 +135,13 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen text-gray-800 dark:text-gray-200 transition-colors duration-300">
       <div className="container mx-auto px-4 py-8 md:py-12">
-        <header className="flex justify-between items-center mb-8">
+        <header className="text-center mb-8 relative">
             <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white">
                 Subtitle studio by @sagar.parmar.x90
             </h1>
-            <DarkModeToggle />
+            <div className="absolute top-1/2 right-0 transform -translate-y-1/2">
+                <DarkModeToggle />
+            </div>
         </header>
         <main className="max-w-4xl mx-auto">
           {renderContent()}
