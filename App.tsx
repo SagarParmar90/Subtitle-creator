@@ -72,7 +72,28 @@ const App: React.FC = () => {
 
     try {
       const result = await transcribeAudio(audioFile, language);
-      setSubtitles(result);
+      
+      // Post-process subtitles to fix potential timing issues from the API
+      const sanitizedSubtitles: SubtitleWord[] = [];
+      let lastEndTime = 0;
+      for (const word of result) {
+          let { startTime, endTime } = word;
+
+          // Ensure timestamps are chronological
+          if (startTime < lastEndTime) {
+              startTime = lastEndTime;
+          }
+          
+          // Ensure a minimum duration for each word to prevent zero-length subtitles
+          if (endTime <= startTime) {
+              endTime = startTime + 0.05; // 50ms minimum duration
+          }
+
+          sanitizedSubtitles.push({ ...word, startTime, endTime });
+          lastEndTime = endTime;
+      }
+
+      setSubtitles(sanitizedSubtitles);
       setAppState('editing');
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
@@ -109,20 +130,17 @@ const App: React.FC = () => {
         return (
           <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md space-y-6">
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Upload Audio File</h2>
-            {/* FIX: The app state can never be 'loading' in this branch, so the component should not be disabled. */}
-            <FileUpload onFileSelect={handleFileSelect} disabled={false} />
+            <FileUpload onFileSelect={handleFileSelect} disabled={appState === 'loading'} />
             {audioFile && (
               <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
                 <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Selected file: <span className="font-normal">{audioFile.name}</span></p>
               </div>
             )}
             {error && <div className="p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">{error}</div>}
-            {/* FIX: The app state can never be 'loading' in this branch, so the component should not be disabled. */}
-            <LanguageSelector value={language} onChange={setLanguage} disabled={false} />
+            <LanguageSelector value={language} onChange={setLanguage} disabled={appState === 'loading'} />
             <button
               onClick={handleGenerate}
-              // FIX: The app state can never be 'loading' here. The button's disabled state should only depend on whether a file is selected.
-              disabled={!audioFile}
+              disabled={!audioFile || appState === 'loading'}
               className="w-full px-5 py-3 text-base font-medium text-center text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 disabled:bg-primary-300 disabled:cursor-not-allowed dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800 dark:disabled:bg-primary-800"
             >
               Generate Subtitles

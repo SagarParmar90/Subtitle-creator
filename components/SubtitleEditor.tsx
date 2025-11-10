@@ -27,17 +27,6 @@ const formatTimestamp = (seconds: number, format: 'srt' | 'default'): string => 
   return timeString.substr(0, 8); // hh:mm:ss
 };
 
-// Utility to create word-by-word subtitle lines for SRT format
-const groupWordsToLines = (words: SubtitleWord[]): { text: string, startTime: number, endTime: number }[] => {
-    // Return each word as its own line for precise word-by-word subtitles
-    return words.map(word => ({
-        text: word.word,
-        startTime: word.startTime,
-        endTime: word.endTime
-    }));
-};
-
-
 const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRestart, language, audioFile }) => {
   const [subtitles, setSubtitles] = useState<SubtitleWord[]>(initialSubtitles);
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
@@ -177,12 +166,75 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     let filename = `subtitles.${format}`;
 
     switch (format) {
-      case 'srt':
-        const lines = groupWordsToLines(subtitles);
-        content = lines.map((line, index) => 
-            `${index + 1}\n${formatTimestamp(line.startTime, 'srt')} --> ${formatTimestamp(line.endTime, 'srt')}\n${line.text}\n`
-        ).join('\n');
+      case 'srt': {
+        const MAX_CHARS_PER_LINE = 42;
+        const PHRASE_GAP_THRESHOLD = 0.2; // A 200ms pause indicates a new phrase.
+        const phrases: { text: string; startTime: number; endTime: number }[] = [];
+
+        if (subtitles.length > 0) {
+            let currentPhraseText = subtitles[0].word;
+            let currentPhraseStart = subtitles[0].startTime;
+
+            for (let i = 1; i < subtitles.length; i++) {
+                const prevWord = subtitles[i - 1];
+                const currentWord = subtitles[i];
+                const gap = currentWord.startTime - prevWord.endTime;
+                const potentialNextText = `${currentPhraseText} ${currentWord.word}`;
+
+                if (gap < PHRASE_GAP_THRESHOLD && potentialNextText.length <= MAX_CHARS_PER_LINE) {
+                    currentPhraseText = potentialNextText;
+                } else {
+                    phrases.push({
+                        text: currentPhraseText,
+                        startTime: currentPhraseStart,
+                        endTime: prevWord.endTime,
+                    });
+                    currentPhraseText = currentWord.word;
+                    currentPhraseStart = currentWord.startTime;
+                }
+            }
+            // Push the last phrase
+            phrases.push({
+                text: currentPhraseText,
+                startTime: currentPhraseStart,
+                endTime: subtitles[subtitles.length - 1].endTime,
+            });
+        }
+
+        content = phrases.map((phrase, index) => {
+            // As a safeguard, ensure a tiny 1ms gap between phrases if they are contiguous
+            const nextPhrase = phrases[index + 1];
+            let endTime = phrase.endTime;
+            if (nextPhrase && endTime >= nextPhrase.startTime) {
+                endTime = nextPhrase.startTime - 0.001;
+            }
+            // Safety check to ensure duration is positive
+            if (endTime <= phrase.startTime) {
+                endTime = phrase.startTime + 0.1;
+            }
+
+            let phraseText = phrase.text;
+            // Split long lines into two for better readability.
+            if (phraseText.length > MAX_CHARS_PER_LINE) {
+                const idealSplitPoint = Math.round(phraseText.length / 2);
+                let splitPoint = phraseText.lastIndexOf(' ', idealSplitPoint);
+                if (splitPoint === -1) {
+                    splitPoint = phraseText.indexOf(' ', idealSplitPoint);
+                }
+
+                if (splitPoint !== -1) {
+                    const line1 = phraseText.substring(0, splitPoint).trim();
+                    const line2 = phraseText.substring(splitPoint).trim();
+                    if (line1.length > 0 && line2.length > 0 && line1.length <= MAX_CHARS_PER_LINE && line2.length <= MAX_CHARS_PER_LINE) {
+                       phraseText = `${line1}\n${line2}`;
+                    }
+                }
+            }
+
+            return `${index + 1}\n${formatTimestamp(phrase.startTime, 'srt')} --> ${formatTimestamp(endTime, 'srt')}\n${phraseText}`;
+        }).join('\n\n');
         break;
+      }
       case 'txt':
         content = subtitles.map(s => s.word).join(' ');
         break;
