@@ -6,6 +6,7 @@ import PlayIcon from './icons/PlayIcon';
 import PauseIcon from './icons/PauseIcon';
 import SearchWidget from './SearchWidget';
 import TextToolsWidget from './TextToolsWidget';
+import SRTSettings from './SRTSettings';
 
 interface SubtitleEditorProps {
   initialSubtitles: SubtitleWord[];
@@ -47,6 +48,12 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
   const [replaceTerm, setReplaceTerm] = useState('');
   const [findCaseSensitive, setFindCaseSensitive] = useState(false);
   const [lastReplacedIndex, setLastReplacedIndex] = useState(-1);
+  
+  // SRT settings state
+  const [maxChars, setMaxChars] = useState(7);
+  const [minDuration, setMinDuration] = useState(1.2);
+  const [gapFrames, setGapFrames] = useState(0);
+  const [lines, setLines] = useState<'single' | 'double'>('single');
   
   const foundIndices = useMemo(() => {
     if (!findTerm) return [];
@@ -167,72 +174,94 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
 
     switch (format) {
       case 'srt': {
-        const MAX_CHARS_PER_LINE = 42;
-        const PHRASE_GAP_THRESHOLD = 0.2; // A 200ms pause indicates a new phrase.
-        const phrases: { text: string; startTime: number; endTime: number }[] = [];
+        const gapInSeconds = gapFrames / 30.0; // Assuming 30fps
 
+        // 1. Group words into lines based on maxChars
+        let srtLines: { text: string; startTime: number; endTime: number }[] = [];
         if (subtitles.length > 0) {
-            let currentPhraseText = subtitles[0].word;
-            let currentPhraseStart = subtitles[0].startTime;
+            let currentLine = {
+                text: '',
+                startTime: subtitles[0].startTime,
+                endTime: 0,
+            };
 
-            for (let i = 1; i < subtitles.length; i++) {
-                const prevWord = subtitles[i - 1];
-                const currentWord = subtitles[i];
-                const gap = currentWord.startTime - prevWord.endTime;
-                const potentialNextText = `${currentPhraseText} ${currentWord.word}`;
+            for (let i = 0; i < subtitles.length; i++) {
+                const wordData = subtitles[i];
+                // Sanitize the word to remove any potential newlines from transcription
+                const word = wordData.word.replace(/[\r\n]+/g, ' ').trim();
+                if (!word) continue; // Skip empty words after sanitization
 
-                if (gap < PHRASE_GAP_THRESHOLD && potentialNextText.length <= MAX_CHARS_PER_LINE) {
-                    currentPhraseText = potentialNextText;
+                const newText = currentLine.text === '' ? word : `${currentLine.text} ${word}`;
+
+                if (newText.length > maxChars && currentLine.text !== '') {
+                    // Finish the current line using the previous word's end time
+                    currentLine.endTime = subtitles[i-1].endTime;
+                    srtLines.push({ ...currentLine });
+
+                    // Start a new line
+                    currentLine = {
+                        text: word,
+                        startTime: wordData.startTime,
+                        endTime: wordData.endTime,
+                    };
                 } else {
-                    phrases.push({
-                        text: currentPhraseText,
-                        startTime: currentPhraseStart,
-                        endTime: prevWord.endTime,
-                    });
-                    currentPhraseText = currentWord.word;
-                    currentPhraseStart = currentWord.startTime;
+                    // Add to current line
+                    currentLine.text = newText;
+                    currentLine.endTime = wordData.endTime;
                 }
             }
-            // Push the last phrase
-            phrases.push({
-                text: currentPhraseText,
-                startTime: currentPhraseStart,
-                endTime: subtitles[subtitles.length - 1].endTime,
-            });
+            // Push the last remaining line
+            if (currentLine.text !== '') {
+                srtLines.push({ ...currentLine });
+            }
         }
 
-        content = phrases.map((phrase, index) => {
-            // As a safeguard, ensure a tiny 1ms gap between phrases if they are contiguous
-            const nextPhrase = phrases[index + 1];
-            let endTime = phrase.endTime;
-            if (nextPhrase && endTime >= nextPhrase.startTime) {
-                endTime = nextPhrase.startTime - 0.001;
-            }
-            // Safety check to ensure duration is positive
-            if (endTime <= phrase.startTime) {
-                endTime = phrase.startTime + 0.1;
-            }
-
-            let phraseText = phrase.text;
-            // Split long lines into two for better readability.
-            if (phraseText.length > MAX_CHARS_PER_LINE) {
-                const idealSplitPoint = Math.round(phraseText.length / 2);
-                let splitPoint = phraseText.lastIndexOf(' ', idealSplitPoint);
-                if (splitPoint === -1) {
-                    splitPoint = phraseText.indexOf(' ', idealSplitPoint);
-                }
-
-                if (splitPoint !== -1) {
-                    const line1 = phraseText.substring(0, splitPoint).trim();
-                    const line2 = phraseText.substring(splitPoint).trim();
-                    if (line1.length > 0 && line2.length > 0 && line1.length <= MAX_CHARS_PER_LINE && line2.length <= MAX_CHARS_PER_LINE) {
-                       phraseText = `${line1}\n${line2}`;
-                    }
+        // 2. Combine lines if 'double' is selected
+        let finalSrtBlocks: { text: string; startTime: number; endTime: number }[] = [];
+        if (lines === 'single') {
+            finalSrtBlocks = srtLines;
+        } else { // 'double'
+            for (let i = 0; i < srtLines.length; i += 2) {
+                if (i + 1 < srtLines.length) {
+                    const line1 = srtLines[i];
+                    const line2 = srtLines[i + 1];
+                    finalSrtBlocks.push({
+                        text: `${line1.text}\n${line2.text}`,
+                        startTime: line1.startTime,
+                        endTime: line2.endTime,
+                    });
+                } else {
+                    finalSrtBlocks.push(srtLines[i]); // Add the last odd line
                 }
             }
+        }
 
-            return `${index + 1}\n${formatTimestamp(phrase.startTime, 'srt')} --> ${formatTimestamp(endTime, 'srt')}\n${phraseText}`;
+        // 3. Post-process to enforce min duration and gaps
+        finalSrtBlocks.forEach((block, i) => {
+            // Enforce minimum duration
+            if (block.endTime - block.startTime < minDuration) {
+                block.endTime = block.startTime + minDuration;
+            }
+
+            // Enforce gap with the next block
+            if (i + 1 < finalSrtBlocks.length) {
+                const nextBlock = finalSrtBlocks[i + 1];
+                const requiredEndTime = nextBlock.startTime - gapInSeconds;
+                if (block.endTime > requiredEndTime) {
+                    block.endTime = requiredEndTime;
+                }
+                // Final check to prevent negative duration after adjustment
+                if (block.endTime <= block.startTime) {
+                    block.endTime = block.startTime + 0.05; // 50ms fallback
+                }
+            }
+        });
+
+        // 4. Format into SRT string
+        content = finalSrtBlocks.map((block, index) => {
+            return `${index + 1}\n${formatTimestamp(block.startTime, 'srt')} --> ${formatTimestamp(block.endTime, 'srt')}\n${block.text}`;
         }).join('\n\n');
+        
         break;
       }
       case 'txt':
@@ -392,6 +421,17 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                     }}
                 />
                 
+                <SRTSettings
+                    maxChars={maxChars}
+                    setMaxChars={setMaxChars}
+                    minDuration={minDuration}
+                    setMinDuration={setMinDuration}
+                    gapFrames={gapFrames}
+                    setGapFrames={setGapFrames}
+                    lines={lines}
+                    setLines={setLines}
+                />
+
                 <div className="p-4 border dark:border-gray-600 rounded-lg space-y-4">
                     <div>
                         <h3 className="font-semibold mb-3 text-gray-800 dark:text-white">Actions</h3>
