@@ -12,7 +12,7 @@ interface SubtitleEditorProps {
   initialSubtitles: SubtitleWord[];
   onRestart: () => void;
   language: string;
-  audioFile: File;
+  audioFile: File | null;
 }
 
 const formatTimestamp = (seconds: number, format: 'srt' | 'default'): string => {
@@ -78,6 +78,8 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         const url = URL.createObjectURL(audioFile);
         setAudioUrl(url);
         return () => URL.revokeObjectURL(url);
+    } else {
+        setAudioUrl('');
     }
   }, [audioFile]);
 
@@ -107,7 +109,7 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         audio.removeEventListener('play', handlePlay);
         audio.removeEventListener('pause', handlePause);
     };
-  }, [subtitles]);
+  }, [subtitles, audioUrl]); // Add audioUrl dep to re-bind if audio changes
 
   useEffect(() => {
     if (activeWordRef.current) {
@@ -307,6 +309,8 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
 
   return (
     <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+        {/* Audio Player Section */}
+        {audioFile ? (
         <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
             <audio ref={audioRef} src={audioUrl} className="hidden" />
             <div className="flex items-center gap-4">
@@ -332,6 +336,11 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                 </div>
             </div>
         </div>
+        ) : (
+            <div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 rounded-lg text-sm text-yellow-800 dark:text-yellow-200">
+                Editing mode only. No audio file loaded for playback.
+            </div>
+        )}
 
         <div className="mb-4">
              <h2 className="text-xl font-bold text-gray-800 dark:text-white">Edit Subtitles</h2>
@@ -352,8 +361,8 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                         <React.Fragment key={index}>
                             <div 
                                 onClick={() => handleTimestampClick(subtitle.startTime)}
-                                className="cursor-pointer text-right font-mono text-sm text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                                title="Click to seek audio"
+                                className={`cursor-pointer text-right font-mono text-sm transition-colors ${audioFile ? 'text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400' : 'text-gray-300 dark:text-gray-600 cursor-default'}`}
+                                title={audioFile ? "Click to seek audio" : "No audio loaded"}
                             >
                                 {formatTimestamp(subtitle.startTime, 'default')}
                             </div>
@@ -396,7 +405,7 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                             setLastReplacedIndex(nextIndex);
                             return 1;
                         }
-                        return 0; // No more occurrences found
+                        return 0; 
                     }}
                     onReplaceAll={() => {
                          if (!findTerm) return 0;

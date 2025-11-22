@@ -5,13 +5,14 @@ interface LanguageSelectorProps {
   value: string;
   onChange: (value: string) => void;
   disabled: boolean;
+  label?: string;
 }
 
-const LanguageSelector: React.FC<LanguageSelectorProps> = ({ value, onChange, disabled }) => {
+const LanguageSelector: React.FC<LanguageSelectorProps> = ({ value, onChange, disabled, label = "Audio Language" }) => {
   return (
     <div>
       <label htmlFor="language" className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">
-        Audio Language
+        {label}
       </label>
       <select
         id="language"

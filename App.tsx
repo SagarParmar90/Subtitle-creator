@@ -3,6 +3,7 @@ import FileUpload from './components/FileUpload';
 import LanguageSelector from './components/LanguageSelector';
 import SubtitleEditor from './components/SubtitleEditor';
 import { transcribeAudio } from './services/geminiService';
+import { parseSRT } from './services/srtService';
 import { AppState, SubtitleWord } from './types';
 import { SUPPORTED_LANGUAGES } from './constants';
 import SpinnerIcon from './components/icons/SpinnerIcon';
@@ -42,17 +43,20 @@ const DarkModeToggle = () => {
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>('idle');
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [srtFile, setSrtFile] = useState<File | null>(null);
   const [language, setLanguage] = useState<string>(SUPPORTED_LANGUAGES[0].code);
   const [subtitles, setSubtitles] = useState<SubtitleWord[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileSelect = useCallback((file: File) => {
-    const validTypes = ['audio/mpeg', 'audio/wav', 'audio/x-wav'];
-    if (validTypes.includes(file.type)) {
-      setAudioFile(file);
-      setError(null);
+    if (file.name.toLowerCase().endsWith('.srt')) {
+        setSrtFile(file);
+        setError(null);
+    } else if (file.type.startsWith('audio/') || file.name.toLowerCase().endsWith('.wav') || file.name.toLowerCase().endsWith('.mp3')) {
+        setAudioFile(file);
+        setError(null);
     } else {
-      setError(`Unsupported file type: ${file.type}. Please upload an MP3 or WAV file.`);
+        setError(`Unsupported file type: ${file.name}. Please upload an MP3, WAV or SRT file.`);
     }
   }, []);
 
@@ -102,13 +106,37 @@ const App: React.FC = () => {
       setAppState('error');
     }
   };
+
+  const handleImportSrt = async () => {
+      if (!srtFile) return;
+      setAppState('loading');
+      setError(null);
+      
+      try {
+          const parsedSubtitles = await parseSRT(srtFile);
+          if (parsedSubtitles.length === 0) {
+              throw new Error("Could not parse subtitles from the file. It might be empty or invalid.");
+          }
+          setSubtitles(parsedSubtitles);
+          setAppState('editing');
+      } catch (err: unknown) {
+          const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+          console.error(err);
+          setError(`SRT Import failed: ${errorMessage}`);
+          setAppState('error');
+      }
+  };
   
   const handleRestart = () => {
       setAudioFile(null);
+      setSrtFile(null);
       setSubtitles([]);
       setError(null);
       setAppState('idle');
   };
+  
+  const removeAudio = () => setAudioFile(null);
+  const removeSrt = () => setSrtFile(null);
 
   const renderContent = () => {
     switch (appState) {
@@ -118,33 +146,74 @@ const App: React.FC = () => {
             <div className="flex justify-center items-center mb-4">
               <SpinnerIcon className="w-12 h-12 text-primary-600 animate-spin" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Generating Subtitles...</h2>
+            <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Processing...</h2>
             <p className="text-gray-500 dark:text-gray-400 mt-2">This may take a few moments. Please wait.</p>
           </div>
         );
       case 'editing':
-        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart} language={language} audioFile={audioFile!} />;
+        return <SubtitleEditor initialSubtitles={subtitles} onRestart={handleRestart} language={language} audioFile={audioFile} />;
       case 'idle':
       case 'error':
       default:
         return (
           <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md space-y-6">
-            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Upload Audio File</h2>
-            <FileUpload onFileSelect={handleFileSelect} disabled={appState === 'loading'} />
-            {audioFile && (
-              <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
-                <p className="text-sm font-medium text-gray-800 dark:text-gray-200">Selected file: <span className="font-normal">{audioFile.name}</span></p>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Upload Media</h2>
+            
+            <FileUpload onFileSelect={handleFileSelect} disabled={false} />
+            
+            {(audioFile || srtFile) && (
+              <div className="p-4 bg-gray-100 dark:bg-gray-700 rounded-lg space-y-2">
+                <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-300">Selected Files</h3>
+                {audioFile && (
+                   <div className="flex justify-between items-center text-sm bg-white dark:bg-gray-600 p-2 rounded border dark:border-gray-500">
+                       <span className="text-gray-800 dark:text-gray-200 truncate">🎵 {audioFile.name}</span>
+                       <button onClick={removeAudio} className="text-red-500 hover:text-red-700 text-xs font-bold px-2">Remove</button>
+                   </div>
+                )}
+                {srtFile && (
+                   <div className="flex justify-between items-center text-sm bg-white dark:bg-gray-600 p-2 rounded border dark:border-gray-500">
+                       <span className="text-gray-800 dark:text-gray-200 truncate">📝 {srtFile.name}</span>
+                       <button onClick={removeSrt} className="text-red-500 hover:text-red-700 text-xs font-bold px-2">Remove</button>
+                   </div>
+                )}
               </div>
             )}
+            
             {error && <div className="p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">{error}</div>}
-            <LanguageSelector value={language} onChange={setLanguage} disabled={appState === 'loading'} />
-            <button
-              onClick={handleGenerate}
-              disabled={!audioFile || appState === 'loading'}
-              className="w-full px-5 py-3 text-base font-medium text-center text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 disabled:bg-primary-300 disabled:cursor-not-allowed dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800 dark:disabled:bg-primary-800"
-            >
-              Generate Subtitles
-            </button>
+            
+            {/* Language Selector is now always available */}
+            <div className="border-t dark:border-gray-600 pt-4">
+                <LanguageSelector 
+                    value={language} 
+                    onChange={setLanguage} 
+                    disabled={false} 
+                    label={srtFile && !audioFile ? "Subtitle Language" : "Audio/Subtitle Language"}
+                />
+                {srtFile && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        Note: Select the correct language to enable features like Romanization (transliteration).
+                    </p>
+                )}
+            </div>
+            
+            <div className="mt-4">
+                {!srtFile ? (
+                    <button
+                        onClick={handleGenerate}
+                        disabled={!audioFile}
+                        className="w-full px-5 py-3 text-base font-medium text-center text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 disabled:bg-primary-300 disabled:cursor-not-allowed dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800 dark:disabled:bg-primary-800"
+                    >
+                        Generate Subtitles from Audio
+                    </button>
+                ) : (
+                     <button
+                      onClick={handleImportSrt}
+                      className="w-full px-5 py-3 text-base font-medium text-center text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 dark:bg-green-600 dark:hover:bg-green-700 dark:focus:ring-green-800"
+                    >
+                      Edit Imported Subtitles {audioFile ? '(with Audio)' : ''}
+                    </button>
+                )}
+            </div>
           </div>
         );
     }

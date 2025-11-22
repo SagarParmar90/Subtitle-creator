@@ -13,6 +13,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       onFileSelect(e.target.files[0]);
+      // Reset value so same file can be selected again if needed
+      e.target.value = '';
     }
   };
 
@@ -71,13 +73,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
         <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
           <span className="font-semibold">Click to upload</span> or drag and drop
         </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400">MP3 or WAV</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Audio (MP3, WAV) or Subtitles (SRT)</p>
       </div>
       <input
         ref={fileInputRef}
         type="file"
         className="hidden"
-        accept=".mp3,.wav,audio/mpeg,audio/wav"
+        accept=".mp3,.wav,audio/mpeg,audio/wav,.srt"
         onChange={handleFileChange}
         disabled={disabled}
       />
