@@ -1,7 +1,7 @@
 import React from 'react';
 import QuestionIcon from './icons/QuestionIcon';
 
-const Tooltip = ({ text, children }: { text: string; children: React.ReactNode }) => (
+const Tooltip = ({ text, children }: { text: string; children?: React.ReactNode }) => (
   <div className="relative flex items-center group">
     {children}
     <div className="absolute left-0 bottom-full mb-2 w-48 p-2 text-xs text-white bg-gray-900 rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10 dark:bg-gray-200 dark:text-gray-900">
@@ -19,6 +19,8 @@ interface SRTSettingsProps {
   setGapFrames: (value: number) => void;
   lines: 'single' | 'double';
   setLines: (value: 'single' | 'double') => void;
+  removeBrackets: boolean;
+  setRemoveBrackets: (value: boolean) => void;
 }
 
 const SRTSettings: React.FC<SRTSettingsProps> = ({
@@ -30,6 +32,8 @@ const SRTSettings: React.FC<SRTSettingsProps> = ({
   setGapFrames,
   lines,
   setLines,
+  removeBrackets,
+  setRemoveBrackets
 }) => {
   return (
     <div className="p-4 border dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700/50 space-y-4">
@@ -39,7 +43,6 @@ const SRTSettings: React.FC<SRTSettingsProps> = ({
         <div className="flex justify-between items-center text-sm">
           <Tooltip text="The maximum number of characters allowed on a single subtitle line.">
              <label htmlFor="max-chars" className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
-                {/* FIX: Grouped text and icon within a single span to resolve a potential JSX parsing issue. */}
                 <span>Maximum length in characters <QuestionIcon /></span>
              </label>
           </Tooltip>
@@ -61,7 +64,6 @@ const SRTSettings: React.FC<SRTSettingsProps> = ({
         <div className="flex justify-between items-center text-sm">
            <Tooltip text="The shortest amount of time a subtitle line will be displayed on screen.">
               <label htmlFor="min-duration" className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
-                {/* FIX: Grouped text and icon within a single span to resolve a potential JSX parsing issue. */}
                 <span>Minimum duration in seconds <QuestionIcon /></span>
               </label>
             </Tooltip>
@@ -83,7 +85,6 @@ const SRTSettings: React.FC<SRTSettingsProps> = ({
         <div className="flex justify-between items-center text-sm">
            <Tooltip text="The minimum gap (in frames) between one subtitle ending and the next one starting. Assumes 30fps.">
               <label htmlFor="gap-frames" className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
-                {/* FIX: Grouped text and icon within a single span to resolve a potential JSX parsing issue. */}
                 <span>Gap between captions (frames) <QuestionIcon /></span>
               </label>
             </Tooltip>
@@ -133,6 +134,21 @@ const SRTSettings: React.FC<SRTSettingsProps> = ({
                 </label>
             </div>
         </div>
+      </div>
+
+      <div className="flex items-center pt-2">
+        <input
+            id="remove-brackets"
+            type="checkbox"
+            checked={removeBrackets}
+            onChange={(e) => setRemoveBrackets(e.target.checked)}
+            className="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+        />
+        <Tooltip text="Removes text inside square brackets like [Applause] or [cite: 1] from the exported file.">
+            <label htmlFor="remove-brackets" className="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300 flex items-center cursor-pointer">
+                <span>Remove bracketed text (e.g. [cite]) <QuestionIcon /></span>
+            </label>
+        </Tooltip>
       </div>
     </div>
   );

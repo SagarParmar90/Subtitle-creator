@@ -1,3 +1,4 @@
+
 // FIX: Import `Type` for responseSchema.
 import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
 import { SubtitleWord } from "../types";
@@ -21,27 +22,29 @@ export const transcribeAudio = async (file: File, language: string): Promise<Sub
   if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
   }
+  // Create a fresh instance for every request to ensure up-to-date key access
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const audioPart = await fileToGenerativePart(file);
 
+  // Using gemini-3-pro-preview for transcription as word-level timestamps require complex reasoning 
+  // and this model is reliably supported via the generateContent method.
   const prompt = `You are an expert audio transcription service. Transcribe the provided audio file.
-The language is ${language}.
+The language of the audio is ${language}.
 Your task is to provide a word-for-word transcript with precise start and end timestamps for each word.
 The output MUST be a valid JSON array of objects. Each object in the array should represent a single word and have three properties:
-- "word" (the transcribed word as a string)
-- "startTime" (the start time of the word in seconds, as a floating-point number)
-- "endTime" (the end time of the word in seconds, as a floating-point number).
-Your entire response must be ONLY the raw JSON array. Do not include any introductory text, explanations, or code block formatting.`;
+- "word": the transcribed word (string)
+- "startTime": the start time in seconds (number)
+- "endTime": the end time in seconds (number)
+Generate the transcription for the ENTIRE audio file. Ensure timestamps are perfectly synchronized with the audio speech.`;
   
   const textPart = { text: prompt };
 
   const response: GenerateContentResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-pro',
+    model: 'gemini-3-pro-preview',
     contents: { parts: [audioPart, textPart] },
     config: {
         responseMimeType: "application/json",
-        // FIX: Use responseSchema to enforce a robust JSON output structure for the transcription.
         responseSchema: {
           type: Type.ARRAY,
           items: {
@@ -58,17 +61,19 @@ Your entire response must be ONLY the raw JSON array. Do not include any introdu
   });
 
   try {
-    const transcription = JSON.parse(response.text);
-    // Basic validation
-    if (Array.isArray(transcription) && transcription.every(item => 'word' in item && 'startTime' in item && 'endTime' in item)) {
+    const text = response.text;
+    if (!text) {
+        throw new Error("Empty response from AI.");
+    }
+    const transcription = JSON.parse(text);
+    if (Array.isArray(transcription)) {
         return transcription as SubtitleWord[];
     } else {
         throw new Error("Invalid JSON structure received from API.");
     }
   } catch (e) {
     console.error("Failed to parse Gemini response:", e);
-    console.error("Raw response text:", response.text);
-    throw new Error("The AI returned an invalid response format. Please try again.");
+    throw new Error("The AI failed to generate a valid transcript. The audio might be too long or the format unsupported.");
   }
 };
 
@@ -80,15 +85,14 @@ export const transliterateText = async (subtitles: SubtitleWord[]): Promise<Subt
 
   const prompt = `You are an expert transliteration service. Your task is to transliterate each 'word' in the provided JSON array into the Roman (English) script.
 Keep the 'startTime' and 'endTime' values exactly the same for each word.
-For example, if the input word is "नमस्ते", the output word should be "namaste".
-Preserve the original JSON structure perfectly. Your entire response must be ONLY the raw JSON array. Do not include any introductory text, explanations, or code block formatting.
+Preserve the original JSON structure perfectly.
 
-Here is the JSON data to transliterate:
+Here is the JSON data:
 ${JSON.stringify(subtitles)}
 `;
 
   const response: GenerateContentResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
         responseMimeType: "application/json",
@@ -108,15 +112,16 @@ ${JSON.stringify(subtitles)}
   });
 
   try {
-    const transliterated = JSON.parse(response.text);
-    if (Array.isArray(transliterated) && transliterated.length === subtitles.length && transliterated.every(item => 'word' in item && 'startTime' in item && 'endTime' in item)) {
+    const text = response.text;
+    if (!text) throw new Error("Empty response");
+    const transliterated = JSON.parse(text);
+    if (Array.isArray(transliterated)) {
         return transliterated as SubtitleWord[];
     } else {
-        throw new Error("Invalid JSON structure received from API for transliteration.");
+        throw new Error("Invalid JSON structure received from API.");
     }
   } catch (e) {
-    console.error("Failed to parse Gemini response for transliteration:", e);
-    console.error("Raw response text:", response.text);
-    throw new Error("The AI returned an invalid response format for transliteration. Please try again.");
+    console.error("Failed to parse transliteration response:", e);
+    throw new Error("Transliteration failed. Please try again.");
   }
 };

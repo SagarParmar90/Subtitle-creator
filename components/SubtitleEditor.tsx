@@ -50,10 +50,11 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
   const [lastReplacedIndex, setLastReplacedIndex] = useState(-1);
   
   // SRT settings state
-  const [maxChars, setMaxChars] = useState(7);
+  const [maxChars, setMaxChars] = useState(32);
   const [minDuration, setMinDuration] = useState(1.2);
   const [gapFrames, setGapFrames] = useState(0);
-  const [lines, setLines] = useState<'single' | 'double'>('single');
+  const [lines, setLines] = useState<'single' | 'double'>('double');
+  const [removeBrackets, setRemoveBrackets] = useState(false);
   
   const foundIndices = useMemo(() => {
     if (!findTerm) return [];
@@ -109,16 +110,17 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         audio.removeEventListener('play', handlePlay);
         audio.removeEventListener('pause', handlePause);
     };
-  }, [subtitles, audioUrl]); // Add audioUrl dep to re-bind if audio changes
+  }, [subtitles, audioUrl]); 
 
+  // Auto-scroll to active word during playback
   useEffect(() => {
-    if (activeWordRef.current) {
+    if (isPlaying && activeWordRef.current && activeWordIndex !== -1) {
         activeWordRef.current.scrollIntoView({
             behavior: 'smooth',
             block: 'center',
         });
     }
-  }, [activeWordIndex]);
+  }, [activeWordIndex, isPlaying]);
   
   // Reset find/replace cursor when find term changes
   useEffect(() => {
@@ -142,8 +144,9 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
     const audio = audioRef.current;
     if (audio) {
-        audio.currentTime = Number(event.target.value);
-        setCurrentTime(audio.currentTime);
+        const time = Number(event.target.value);
+        audio.currentTime = time;
+        setCurrentTime(time);
     }
   };
 
@@ -151,6 +154,9 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     const audio = audioRef.current;
     if (audio) {
         audio.currentTime = time;
+        if (!isPlaying) {
+             audio.play();
+        }
     }
   };
 
@@ -174,45 +180,56 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     let mimeType = 'text/plain';
     let filename = `subtitles.${format}`;
 
+    // Pre-processing for export: Filter out words that become empty if cleaning options are enabled
+    let exportSubtitles = subtitles;
+    if (removeBrackets) {
+        exportSubtitles = subtitles.map(s => ({
+            ...s,
+            word: s.word.replace(/\[.*?\]/g, '').trim()
+        })).filter(s => s.word !== '');
+    }
+
     switch (format) {
       case 'srt': {
-        const gapInSeconds = gapFrames / 30.0; // Assuming 30fps
+        const gapInSeconds = gapFrames / 30.0; 
 
-        // 1. Group words into lines based on maxChars
+        // 1. Group words into single lines based on maxChars
         let srtLines: { text: string; startTime: number; endTime: number }[] = [];
-        if (subtitles.length > 0) {
+        if (exportSubtitles.length > 0) {
             let currentLine = {
                 text: '',
-                startTime: subtitles[0].startTime,
+                startTime: exportSubtitles[0].startTime,
                 endTime: 0,
             };
 
-            for (let i = 0; i < subtitles.length; i++) {
-                const wordData = subtitles[i];
-                // Sanitize the word to remove any potential newlines from transcription
+            for (let i = 0; i < exportSubtitles.length; i++) {
+                const wordData = exportSubtitles[i];
                 const word = wordData.word.replace(/[\r\n]+/g, ' ').trim();
-                if (!word) continue; // Skip empty words after sanitization
+                
+                // Skip completely empty words (though we filtered above, safety check)
+                if (!word) continue;
 
-                const newText = currentLine.text === '' ? word : `${currentLine.text} ${word}`;
-
-                if (newText.length > maxChars && currentLine.text !== '') {
-                    // Finish the current line using the previous word's end time
-                    currentLine.endTime = subtitles[i-1].endTime;
+                // Check if adding this word exceeds maxChars
+                // If current text is empty, just add the word even if it's long (to avoid infinite loops)
+                if (currentLine.text !== '' && (currentLine.text.length + 1 + word.length) > maxChars) {
+                    // Push current line
+                    currentLine.endTime = exportSubtitles[i-1].endTime;
                     srtLines.push({ ...currentLine });
 
-                    // Start a new line
+                    // Start new line
                     currentLine = {
                         text: word,
                         startTime: wordData.startTime,
                         endTime: wordData.endTime,
                     };
                 } else {
-                    // Add to current line
+                    // Append to current line
+                    const newText = currentLine.text === '' ? word : `${currentLine.text} ${word}`;
                     currentLine.text = newText;
                     currentLine.endTime = wordData.endTime;
                 }
             }
-            // Push the last remaining line
+            // Push the final line
             if (currentLine.text !== '') {
                 srtLines.push({ ...currentLine });
             }
@@ -227,13 +244,16 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                 if (i + 1 < srtLines.length) {
                     const line1 = srtLines[i];
                     const line2 = srtLines[i + 1];
+                    
+                    // Logic to check if combining creates a valid block (e.g., total duration, gap check)
+                    // For now, simple stacking
                     finalSrtBlocks.push({
                         text: `${line1.text}\n${line2.text}`,
                         startTime: line1.startTime,
                         endTime: line2.endTime,
                     });
                 } else {
-                    finalSrtBlocks.push(srtLines[i]); // Add the last odd line
+                    finalSrtBlocks.push(srtLines[i]); 
                 }
             }
         }
@@ -242,24 +262,27 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         finalSrtBlocks.forEach((block, i) => {
             // Enforce minimum duration
             if (block.endTime - block.startTime < minDuration) {
-                block.endTime = block.startTime + minDuration;
+                const idealEndTime = block.startTime + minDuration;
+                block.endTime = idealEndTime;
             }
 
-            // Enforce gap with the next block
+            // Enforce gaps between blocks
             if (i + 1 < finalSrtBlocks.length) {
                 const nextBlock = finalSrtBlocks[i + 1];
                 const requiredEndTime = nextBlock.startTime - gapInSeconds;
+                
+                // If the extended block overlaps with the next one (minus gap), trim it
                 if (block.endTime > requiredEndTime) {
                     block.endTime = requiredEndTime;
                 }
-                // Final check to prevent negative duration after adjustment
+                
+                // Safety: ensure end is still > start after trimming
                 if (block.endTime <= block.startTime) {
-                    block.endTime = block.startTime + 0.05; // 50ms fallback
+                    block.endTime = block.startTime + 0.01; // Minimum sliver
                 }
             }
         });
 
-        // 4. Format into SRT string
         content = finalSrtBlocks.map((block, index) => {
             return `${index + 1}\n${formatTimestamp(block.startTime, 'srt')} --> ${formatTimestamp(block.endTime, 'srt')}\n${block.text}`;
         }).join('\n\n');
@@ -267,22 +290,22 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         break;
       }
       case 'txt':
-        content = subtitles.map(s => s.word).join(' ');
+        content = exportSubtitles.map(s => s.word).join(' ');
         break;
       case 'csv':
         content = 'word,startTime,endTime\n';
-        content += subtitles.map(s => `"${s.word.replace(/"/g, '""')}",${s.startTime.toFixed(3)},${s.endTime.toFixed(3)}`).join('\n');
+        content += exportSubtitles.map(s => `"${s.word.replace(/"/g, '""')}",${s.startTime.toFixed(3)},${s.endTime.toFixed(3)}`).join('\n');
         mimeType = 'text/csv';
         break;
       case 'json':
-        content = JSON.stringify(subtitles, null, 2);
+        content = JSON.stringify(exportSubtitles, null, 2);
         mimeType = 'application/json';
         filename = 'subtitles.json';
         break;
       case 'prtranscript':
         const prTranscriptObject = {
           version: '1.0',
-          'word-level-transcript': subtitles.map(s => ({
+          'word-level-transcript': exportSubtitles.map(s => ({
             'start-time': s.startTime,
             'end-time': s.endTime,
             word: s.word,
@@ -306,88 +329,126 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
   };
 
   const shouldShowRomanizeButton = !language.startsWith('en-');
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="w-full p-4 md:p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
-        {/* Audio Player Section */}
-        {audioFile ? (
-        <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-            <audio ref={audioRef} src={audioUrl} className="hidden" />
-            <div className="flex items-center gap-4">
-                <button
-                    onClick={togglePlayPause}
-                    className="p-2 rounded-full text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 dark:focus:ring-offset-gray-800"
-                    aria-label={isPlaying ? 'Pause' : 'Play'}
-                >
-                    {isPlaying ? <PauseIcon className="h-6 w-6" /> : <PlayIcon className="h-6 w-6" />}
-                </button>
-                <div className="flex-grow flex items-center gap-2">
-                    <span className="font-mono text-sm text-gray-600 dark:text-gray-300">{formatTimestamp(currentTime, 'default')}</span>
-                    <input
-                        type="range"
-                        min="0"
-                        max={duration || 0}
-                        step="0.01"
-                        value={currentTime}
-                        onChange={handleSeek}
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-600"
-                    />
-                    <span className="font-mono text-sm text-gray-600 dark:text-gray-300">{formatTimestamp(duration, 'default')}</span>
-                </div>
-            </div>
-        </div>
-        ) : (
-            <div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/30 rounded-lg text-sm text-yellow-800 dark:text-yellow-200">
-                Editing mode only. No audio file loaded for playback.
-            </div>
-        )}
+    <div className="w-full bg-white dark:bg-gray-800 rounded-lg shadow-md flex flex-col h-full relative">
+        
+        {/* Sticky Header with Audio Player */}
+        <div className="sticky top-0 z-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm px-6 py-4 rounded-t-lg">
+            {audioFile ? (
+            <div className="flex flex-col gap-2">
+                <audio ref={audioRef} src={audioUrl} className="hidden" />
+                
+                {/* Controls & Time */}
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={togglePlayPause}
+                        className="flex-shrink-0 p-3 rounded-full text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-4 focus:ring-primary-300 dark:focus:ring-primary-900 transition-colors shadow-sm"
+                        aria-label={isPlaying ? 'Pause' : 'Play'}
+                    >
+                        {isPlaying ? <PauseIcon className="h-5 w-5" /> : <PlayIcon className="h-5 w-5 pl-0.5" />}
+                    </button>
 
-        <div className="mb-4">
-             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Edit Subtitles</h2>
-        </div>
-
-        {transliterationError && (
-            <div className="mb-4 p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">
-                {transliterationError}
-            </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 overflow-y-auto h-[60vh] pr-2 border-r-0 md:border-r md:pr-6 dark:border-gray-600">
-                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 items-center">
-                {subtitles.map((subtitle, index) => {
-                    const isFound = foundIndices.includes(index);
-                    return (
-                        <React.Fragment key={index}>
+                    <div className="flex-grow flex flex-col justify-center">
+                         {/* Progress Bar Container */}
+                        <div className="relative w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-full cursor-pointer group">
+                             {/* Filled Progress */}
                             <div 
-                                onClick={() => handleTimestampClick(subtitle.startTime)}
-                                className={`cursor-pointer text-right font-mono text-sm transition-colors ${audioFile ? 'text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400' : 'text-gray-300 dark:text-gray-600 cursor-default'}`}
-                                title={audioFile ? "Click to seek audio" : "No audio loaded"}
-                            >
-                                {formatTimestamp(subtitle.startTime, 'default')}
-                            </div>
-                            <input
-                                ref={index === activeWordIndex ? activeWordRef : null}
-                                type="text"
-                                value={subtitle.word}
-                                onChange={(e) => handleWordChange(index, e.target.value)}
-                                onFocus={() => setSelectedWordForSearch(subtitle.word)}
-                                spellCheck={true}
-                                className={`w-full px-2 py-1 border rounded-md transition-all duration-200 focus:ring-primary-500 focus:border-primary-500 ${
-                                    index === activeWordIndex
-                                    ? 'bg-primary-100 dark:bg-primary-900/50 border-primary-500 text-gray-900 dark:text-white'
-                                    : isFound
-                                    ? 'bg-yellow-200 dark:bg-yellow-700/50 border-yellow-500 text-gray-900 dark:text-white'
-                                    : 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white'
-                                }`}
+                                className="absolute top-0 left-0 h-full bg-primary-500 rounded-full transition-all duration-100 ease-linear"
+                                style={{ width: `${progressPercent}%` }}
                             />
-                        </React.Fragment>
-                    )
-                })}
+                            {/* Thumb Indicator (visible on hover) */}
+                            <div 
+                                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-primary-500 rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
+                                style={{ left: `calc(${progressPercent}% - 6px)` }}
+                            />
+                            {/* Invisible Range Input for Interaction */}
+                            <input
+                                type="range"
+                                min="0"
+                                max={duration || 0}
+                                step="0.01"
+                                value={currentTime}
+                                onChange={handleSeek}
+                                className="absolute top-0 left-0 w-full h-full opacity-0 cursor-pointer z-10"
+                            />
+                        </div>
+                        <div className="flex justify-between items-center mt-1 text-xs font-mono text-gray-500 dark:text-gray-400 select-none">
+                            <span>{formatTimestamp(currentTime, 'default')}</span>
+                            <span>{formatTimestamp(duration, 'default')}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            ) : (
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/30 rounded-lg text-sm text-yellow-800 dark:text-yellow-200 flex items-center justify-center">
+                   <span className="font-semibold mr-2">Mode:</span> Editor Only (No audio loaded)
+                </div>
+            )}
+        </div>
+
+        {/* Main Editor Area */}
+        <div className="flex-grow p-4 md:p-6 grid grid-cols-1 md:grid-cols-3 gap-6 relative">
+            
+            {/* Subtitle List */}
+            <div className="md:col-span-2 overflow-y-auto h-[calc(100vh-250px)] pr-2 scroll-smooth">
+                {transliterationError && (
+                    <div className="mb-4 p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">
+                        {transliterationError}
+                    </div>
+                )}
+                
+                <div className="space-y-1">
+                    {subtitles.map((subtitle, index) => {
+                        const isFound = foundIndices.includes(index);
+                        const isActive = index === activeWordIndex;
+                        return (
+                            <div 
+                                key={index} 
+                                className={`group flex items-center gap-3 p-1.5 rounded-lg transition-all duration-200 ${isActive ? 'bg-primary-50 dark:bg-primary-900/30 scale-[1.01] shadow-sm ring-1 ring-primary-200 dark:ring-primary-800' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
+                            >
+                                <div 
+                                    onClick={() => handleTimestampClick(subtitle.startTime)}
+                                    className={`flex-shrink-0 w-16 text-right font-mono text-xs cursor-pointer select-none transition-colors ${
+                                        isActive 
+                                            ? 'text-primary-600 dark:text-primary-400 font-bold' 
+                                            : audioFile 
+                                                ? 'text-gray-400 dark:text-gray-500 hover:text-primary-600 dark:hover:text-primary-400' 
+                                                : 'text-gray-300 dark:text-gray-600 cursor-default'
+                                    }`}
+                                    title={audioFile ? "Click to seek audio" : undefined}
+                                >
+                                    {formatTimestamp(subtitle.startTime, 'default')}
+                                </div>
+                                <input
+                                    ref={isActive ? activeWordRef : null}
+                                    type="text"
+                                    value={subtitle.word}
+                                    onChange={(e) => handleWordChange(index, e.target.value)}
+                                    onFocus={() => setSelectedWordForSearch(subtitle.word)}
+                                    spellCheck={true}
+                                    className={`flex-grow px-3 py-1.5 rounded-md border text-sm transition-all focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none ${
+                                        isActive
+                                        ? 'border-primary-400 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-medium'
+                                        : isFound
+                                        ? 'bg-yellow-100 dark:bg-yellow-900/60 border-yellow-400 text-gray-900 dark:text-white'
+                                        : 'bg-transparent border-transparent group-hover:border-gray-200 dark:group-hover:border-gray-600 text-gray-700 dark:text-gray-300'
+                                    }`}
+                                />
+                            </div>
+                        )
+                    })}
+                    {subtitles.length === 0 && (
+                        <div className="text-center py-10 text-gray-400 dark:text-gray-500 italic">
+                            No subtitles to display.
+                        </div>
+                    )}
                 </div>
             </div>
 
-            <div className="md:col-span-1 space-y-4">
+            {/* Sidebar Tools */}
+            <div className="md:col-span-1 space-y-4 md:sticky md:top-6 h-fit overflow-y-auto max-h-[calc(100vh-200px)] pb-10">
                 <SearchWidget initialSearchTerm={selectedWordForSearch} />
                 <TextToolsWidget 
                     onFindTermChange={setFindTerm}
@@ -439,9 +500,11 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
                     setGapFrames={setGapFrames}
                     lines={lines}
                     setLines={setLines}
+                    removeBrackets={removeBrackets}
+                    setRemoveBrackets={setRemoveBrackets}
                 />
 
-                <div className="p-4 border dark:border-gray-600 rounded-lg space-y-4">
+                <div className="p-4 border dark:border-gray-600 rounded-lg space-y-4 bg-gray-50 dark:bg-gray-700/50">
                     <div>
                         <h3 className="font-semibold mb-3 text-gray-800 dark:text-white">Actions</h3>
                         <div className="space-y-2">
