@@ -22,13 +22,9 @@ export const transcribeAudio = async (file: File, language: string): Promise<Sub
   if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
   }
-  // Create a fresh instance for every request to ensure up-to-date key access
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
   const audioPart = await fileToGenerativePart(file);
 
-  // Using gemini-3-pro-preview for transcription as word-level timestamps require complex reasoning 
-  // and this model is reliably supported via the generateContent method.
   const prompt = `You are an expert audio transcription service. Transcribe the provided audio file.
 The language of the audio is ${language}.
 Your task is to provide a word-for-word transcript with precise start and end timestamps for each word.
@@ -62,36 +58,24 @@ Generate the transcription for the ENTIRE audio file. Ensure timestamps are perf
 
   try {
     const text = response.text;
-    if (!text) {
-        throw new Error("Empty response from AI.");
-    }
+    if (!text) throw new Error("Empty response from AI.");
     const transcription = JSON.parse(text);
-    if (Array.isArray(transcription)) {
-        return transcription as SubtitleWord[];
-    } else {
-        throw new Error("Invalid JSON structure received from API.");
-    }
+    return Array.isArray(transcription) ? transcription : [];
   } catch (e) {
     console.error("Failed to parse Gemini response:", e);
-    throw new Error("The AI failed to generate a valid transcript. The audio might be too long or the format unsupported.");
+    throw new Error("The AI failed to generate a valid transcript.");
   }
 };
 
 export const transliterateText = async (subtitles: SubtitleWord[]): Promise<SubtitleWord[]> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable is not set.");
-  }
+  if (!process.env.API_KEY) throw new Error("API_KEY not set.");
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `You are an expert transliteration service. Your task is to transliterate each 'word' in the provided JSON array into the Roman (English) script.
 Keep the 'startTime' and 'endTime' values exactly the same for each word.
-Preserve the original JSON structure perfectly.
+JSON: ${JSON.stringify(subtitles)}`;
 
-Here is the JSON data:
-${JSON.stringify(subtitles)}
-`;
-
-  const response: GenerateContentResponse = await ai.models.generateContent({
+  const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
@@ -111,17 +95,37 @@ ${JSON.stringify(subtitles)}
     },
   });
 
-  try {
-    const text = response.text;
-    if (!text) throw new Error("Empty response");
-    const transliterated = JSON.parse(text);
-    if (Array.isArray(transliterated)) {
-        return transliterated as SubtitleWord[];
-    } else {
-        throw new Error("Invalid JSON structure received from API.");
-    }
-  } catch (e) {
-    console.error("Failed to parse transliteration response:", e);
-    throw new Error("Transliteration failed. Please try again.");
-  }
+  return JSON.parse(response.text || "[]");
+};
+
+export const translateToEnglish = async (subtitles: SubtitleWord[]): Promise<SubtitleWord[]> => {
+  if (!process.env.API_KEY) throw new Error("API_KEY not set.");
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  const prompt = `You are a professional translator. Translate the following subtitles into English.
+Provide the translation as a word-for-word array that maps to the original timing as closely as possible.
+Preserve the start and end timestamps.
+JSON: ${JSON.stringify(subtitles)}`;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: prompt,
+    config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              word: { type: Type.STRING },
+              startTime: { type: Type.NUMBER },
+              endTime: { type: Type.NUMBER },
+            },
+            required: ['word', 'startTime', 'endTime'],
+          }
+        }
+    },
+  });
+
+  return JSON.parse(response.text || "[]");
 };

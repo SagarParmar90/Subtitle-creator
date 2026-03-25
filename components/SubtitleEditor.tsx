@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { SubtitleWord, ExportFormat } from '../types';
-import { transliterateText } from '../services/geminiService';
+import { transliterateText, translateToEnglish } from '../services/geminiService';
 import SpinnerIcon from './icons/SpinnerIcon';
 import PlayIcon from './icons/PlayIcon';
 import PauseIcon from './icons/PauseIcon';
@@ -30,9 +31,8 @@ const formatTimestamp = (seconds: number, format: 'srt' | 'default'): string => 
 
 const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRestart, language, audioFile }) => {
   const [subtitles, setSubtitles] = useState<SubtitleWord[]>(initialSubtitles);
-  const [isTranslating, setIsTranslating] = useState<boolean>(false);
-  const [hasBeenRomanized, setHasBeenRomanized] = useState<boolean>(false);
-  const [transliterationError, setTransliterationError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
   const [selectedWordForSearch, setSelectedWordForSearch] = useState<string>('');
 
   const [audioUrl, setAudioUrl] = useState<string>('');
@@ -54,6 +54,7 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
   const [minDuration, setMinDuration] = useState(1.2);
   const [gapFrames, setGapFrames] = useState(0);
   const [lines, setLines] = useState<'single' | 'double'>('double');
+  const [wordsPerCaption, setWordsPerCaption] = useState(0); // 0 means use character limit
   const [removeBrackets, setRemoveBrackets] = useState(false);
   
   const foundIndices = useMemo(() => {
@@ -112,7 +113,6 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     };
   }, [subtitles, audioUrl]); 
 
-  // Auto-scroll to active word during playback
   useEffect(() => {
     if (isPlaying && activeWordRef.current && activeWordIndex !== -1) {
         activeWordRef.current.scrollIntoView({
@@ -122,7 +122,6 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     }
   }, [activeWordIndex, isPlaying]);
   
-  // Reset find/replace cursor when find term changes
   useEffect(() => {
     setLastReplacedIndex(-1);
   }, [findTerm, findCaseSensitive]);
@@ -154,24 +153,33 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     const audio = audioRef.current;
     if (audio) {
         audio.currentTime = time;
-        if (!isPlaying) {
-             audio.play();
-        }
+        if (!isPlaying) audio.play();
     }
   };
 
   const handleRomanize = async () => {
-    setIsTranslating(true);
-    setTransliterationError(null);
+    setIsProcessing(true);
+    setProcessingError(null);
     try {
       const result = await transliterateText(subtitles);
       setSubtitles(result);
-      setHasBeenRomanized(true);
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setTransliterationError(`Failed to Romanize: ${errorMessage}`);
+    } catch (err: any) {
+      setProcessingError(`Failed to Romanize: ${err.message}`);
     } finally {
-      setIsTranslating(false);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTranslate = async () => {
+    setIsProcessing(true);
+    setProcessingError(null);
+    try {
+      const result = await translateToEnglish(subtitles);
+      setSubtitles(result);
+    } catch (err: any) {
+      setProcessingError(`Failed to Translate: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
     }
   };
   
@@ -180,7 +188,6 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     let mimeType = 'text/plain';
     let filename = `subtitles.${format}`;
 
-    // Pre-processing for export: Filter out words that become empty if cleaning options are enabled
     let exportSubtitles = subtitles;
     if (removeBrackets) {
         exportSubtitles = subtitles.map(s => ({
@@ -192,65 +199,54 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     switch (format) {
       case 'srt': {
         const gapInSeconds = gapFrames / 30.0; 
-
-        // 1. Group words into single lines based on maxChars
         let srtLines: { text: string; startTime: number; endTime: number }[] = [];
+        
         if (exportSubtitles.length > 0) {
             let currentLine = {
                 text: '',
                 startTime: exportSubtitles[0].startTime,
                 endTime: 0,
+                wordCount: 0
             };
 
             for (let i = 0; i < exportSubtitles.length; i++) {
                 const wordData = exportSubtitles[i];
                 const word = wordData.word.replace(/[\r\n]+/g, ' ').trim();
-                
-                // Skip completely empty words (though we filtered above, safety check)
                 if (!word) continue;
 
-                // Check if adding this word exceeds maxChars
-                // If current text is empty, just add the word even if it's long (to avoid infinite loops)
-                if (currentLine.text !== '' && (currentLine.text.length + 1 + word.length) > maxChars) {
-                    // Push current line
+                const exceedsChars = currentLine.text !== '' && (currentLine.text.length + 1 + word.length) > maxChars;
+                const exceedsWords = wordsPerCaption > 0 && currentLine.wordCount >= wordsPerCaption;
+
+                if (exceedsChars || exceedsWords) {
                     currentLine.endTime = exportSubtitles[i-1].endTime;
                     srtLines.push({ ...currentLine });
-
-                    // Start new line
                     currentLine = {
                         text: word,
                         startTime: wordData.startTime,
                         endTime: wordData.endTime,
+                        wordCount: 1
                     };
                 } else {
-                    // Append to current line
-                    const newText = currentLine.text === '' ? word : `${currentLine.text} ${word}`;
-                    currentLine.text = newText;
+                    currentLine.text = currentLine.text === '' ? word : `${currentLine.text} ${word}`;
                     currentLine.endTime = wordData.endTime;
+                    currentLine.wordCount++;
                 }
             }
-            // Push the final line
             if (currentLine.text !== '') {
                 srtLines.push({ ...currentLine });
             }
         }
 
-        // 2. Combine lines if 'double' is selected
         let finalSrtBlocks: { text: string; startTime: number; endTime: number }[] = [];
-        if (lines === 'single') {
+        if (lines === 'single' || wordsPerCaption > 0) {
             finalSrtBlocks = srtLines;
-        } else { // 'double'
+        } else {
             for (let i = 0; i < srtLines.length; i += 2) {
                 if (i + 1 < srtLines.length) {
-                    const line1 = srtLines[i];
-                    const line2 = srtLines[i + 1];
-                    
-                    // Logic to check if combining creates a valid block (e.g., total duration, gap check)
-                    // For now, simple stacking
                     finalSrtBlocks.push({
-                        text: `${line1.text}\n${line2.text}`,
-                        startTime: line1.startTime,
-                        endTime: line2.endTime,
+                        text: `${srtLines[i].text}\n${srtLines[i + 1].text}`,
+                        startTime: srtLines[i].startTime,
+                        endTime: srtLines[i + 1].endTime,
                     });
                 } else {
                     finalSrtBlocks.push(srtLines[i]); 
@@ -258,27 +254,15 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
             }
         }
 
-        // 3. Post-process to enforce min duration and gaps
         finalSrtBlocks.forEach((block, i) => {
-            // Enforce minimum duration
             if (block.endTime - block.startTime < minDuration) {
-                const idealEndTime = block.startTime + minDuration;
-                block.endTime = idealEndTime;
+                block.endTime = block.startTime + minDuration;
             }
-
-            // Enforce gaps between blocks
             if (i + 1 < finalSrtBlocks.length) {
                 const nextBlock = finalSrtBlocks[i + 1];
                 const requiredEndTime = nextBlock.startTime - gapInSeconds;
-                
-                // If the extended block overlaps with the next one (minus gap), trim it
                 if (block.endTime > requiredEndTime) {
-                    block.endTime = requiredEndTime;
-                }
-                
-                // Safety: ensure end is still > start after trimming
-                if (block.endTime <= block.startTime) {
-                    block.endTime = block.startTime + 0.01; // Minimum sliver
+                    block.endTime = Math.max(block.startTime + 0.01, requiredEndTime);
                 }
             }
         });
@@ -286,34 +270,18 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
         content = finalSrtBlocks.map((block, index) => {
             return `${index + 1}\n${formatTimestamp(block.startTime, 'srt')} --> ${formatTimestamp(block.endTime, 'srt')}\n${block.text}`;
         }).join('\n\n');
-        
         break;
       }
       case 'txt':
         content = exportSubtitles.map(s => s.word).join(' ');
         break;
       case 'csv':
-        content = 'word,startTime,endTime\n';
-        content += exportSubtitles.map(s => `"${s.word.replace(/"/g, '""')}",${s.startTime.toFixed(3)},${s.endTime.toFixed(3)}`).join('\n');
+        content = 'word,startTime,endTime\n' + exportSubtitles.map(s => `"${s.word.replace(/"/g, '""')}",${s.startTime.toFixed(3)},${s.endTime.toFixed(3)}`).join('\n');
         mimeType = 'text/csv';
         break;
       case 'json':
         content = JSON.stringify(exportSubtitles, null, 2);
         mimeType = 'application/json';
-        filename = 'subtitles.json';
-        break;
-      case 'prtranscript':
-        const prTranscriptObject = {
-          version: '1.0',
-          'word-level-transcript': exportSubtitles.map(s => ({
-            'start-time': s.startTime,
-            'end-time': s.endTime,
-            word: s.word,
-          })),
-        };
-        content = JSON.stringify(prTranscriptObject, null, 2);
-        mimeType = 'application/json';
-        filename = 'subtitles.prtranscript';
         break;
     }
 
@@ -322,220 +290,105 @@ const SubtitleEditor: React.FC<SubtitleEditorProps> = ({ initialSubtitles, onRes
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  const shouldShowRomanizeButton = !language.startsWith('en-');
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const isEnglish = language.startsWith('en-');
 
   return (
     <div className="w-full bg-white dark:bg-gray-800 rounded-lg shadow-md flex flex-col h-full relative">
-        
-        {/* Sticky Header with Audio Player */}
         <div className="sticky top-0 z-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm px-6 py-4 rounded-t-lg">
             {audioFile ? (
             <div className="flex flex-col gap-2">
                 <audio ref={audioRef} src={audioUrl} className="hidden" />
-                
-                {/* Controls & Time */}
                 <div className="flex items-center gap-4">
-                    <button
-                        onClick={togglePlayPause}
-                        className="flex-shrink-0 p-3 rounded-full text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-4 focus:ring-primary-300 dark:focus:ring-primary-900 transition-colors shadow-sm"
-                        aria-label={isPlaying ? 'Pause' : 'Play'}
-                    >
+                    <button onClick={togglePlayPause} className="p-3 rounded-full text-white bg-primary-600 hover:bg-primary-700 shadow-sm">
                         {isPlaying ? <PauseIcon className="h-5 w-5" /> : <PlayIcon className="h-5 w-5 pl-0.5" />}
                     </button>
-
                     <div className="flex-grow flex flex-col justify-center">
-                         {/* Progress Bar Container */}
-                        <div className="relative w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-full cursor-pointer group">
-                             {/* Filled Progress */}
-                            <div 
-                                className="absolute top-0 left-0 h-full bg-primary-500 rounded-full transition-all duration-100 ease-linear"
-                                style={{ width: `${progressPercent}%` }}
-                            />
-                            {/* Thumb Indicator (visible on hover) */}
-                            <div 
-                                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-primary-500 rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                                style={{ left: `calc(${progressPercent}% - 6px)` }}
-                            />
-                            {/* Invisible Range Input for Interaction */}
-                            <input
-                                type="range"
-                                min="0"
-                                max={duration || 0}
-                                step="0.01"
-                                value={currentTime}
-                                onChange={handleSeek}
-                                className="absolute top-0 left-0 w-full h-full opacity-0 cursor-pointer z-10"
-                            />
+                        <div className="relative w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-full cursor-pointer">
+                            <div className="absolute top-0 left-0 h-full bg-primary-500 rounded-full" style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }} />
+                            <input type="range" min="0" max={duration || 0} step="0.01" value={currentTime} onChange={handleSeek} className="absolute top-0 left-0 w-full h-full opacity-0 cursor-pointer" />
                         </div>
-                        <div className="flex justify-between items-center mt-1 text-xs font-mono text-gray-500 dark:text-gray-400 select-none">
+                        <div className="flex justify-between items-center mt-1 text-xs font-mono text-gray-500">
                             <span>{formatTimestamp(currentTime, 'default')}</span>
                             <span>{formatTimestamp(duration, 'default')}</span>
                         </div>
                     </div>
                 </div>
             </div>
-            ) : (
-                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/30 rounded-lg text-sm text-yellow-800 dark:text-yellow-200 flex items-center justify-center">
-                   <span className="font-semibold mr-2">Mode:</span> Editor Only (No audio loaded)
-                </div>
-            )}
+            ) : <div className="p-3 text-sm text-center text-yellow-800 bg-yellow-50 rounded-lg">Mode: Editor Only</div>}
         </div>
 
-        {/* Main Editor Area */}
         <div className="flex-grow p-4 md:p-6 grid grid-cols-1 md:grid-cols-3 gap-6 relative">
-            
-            {/* Subtitle List */}
-            <div className="md:col-span-2 overflow-y-auto h-[calc(100vh-250px)] pr-2 scroll-smooth">
-                {transliterationError && (
-                    <div className="mb-4 p-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">
-                        {transliterationError}
-                    </div>
-                )}
-                
+            <div className="md:col-span-2 overflow-y-auto h-[calc(100vh-250px)] pr-2">
+                {processingError && <div className="mb-4 p-4 text-sm text-red-800 bg-red-50 rounded-lg">{processingError}</div>}
                 <div className="space-y-1">
-                    {subtitles.map((subtitle, index) => {
-                        const isFound = foundIndices.includes(index);
-                        const isActive = index === activeWordIndex;
-                        return (
-                            <div 
-                                key={index} 
-                                className={`group flex items-center gap-3 p-1.5 rounded-lg transition-all duration-200 ${isActive ? 'bg-primary-50 dark:bg-primary-900/30 scale-[1.01] shadow-sm ring-1 ring-primary-200 dark:ring-primary-800' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
-                            >
-                                <div 
-                                    onClick={() => handleTimestampClick(subtitle.startTime)}
-                                    className={`flex-shrink-0 w-16 text-right font-mono text-xs cursor-pointer select-none transition-colors ${
-                                        isActive 
-                                            ? 'text-primary-600 dark:text-primary-400 font-bold' 
-                                            : audioFile 
-                                                ? 'text-gray-400 dark:text-gray-500 hover:text-primary-600 dark:hover:text-primary-400' 
-                                                : 'text-gray-300 dark:text-gray-600 cursor-default'
-                                    }`}
-                                    title={audioFile ? "Click to seek audio" : undefined}
-                                >
-                                    {formatTimestamp(subtitle.startTime, 'default')}
-                                </div>
-                                <input
-                                    ref={isActive ? activeWordRef : null}
-                                    type="text"
-                                    value={subtitle.word}
-                                    onChange={(e) => handleWordChange(index, e.target.value)}
-                                    onFocus={() => setSelectedWordForSearch(subtitle.word)}
-                                    spellCheck={true}
-                                    className={`flex-grow px-3 py-1.5 rounded-md border text-sm transition-all focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none ${
-                                        isActive
-                                        ? 'border-primary-400 bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-medium'
-                                        : isFound
-                                        ? 'bg-yellow-100 dark:bg-yellow-900/60 border-yellow-400 text-gray-900 dark:text-white'
-                                        : 'bg-transparent border-transparent group-hover:border-gray-200 dark:group-hover:border-gray-600 text-gray-700 dark:text-gray-300'
-                                    }`}
-                                />
+                    {subtitles.map((subtitle, index) => (
+                        <div key={index} className={`flex items-center gap-3 p-1.5 rounded-lg transition-all ${index === activeWordIndex ? 'bg-primary-50 dark:bg-primary-900/30 ring-1 ring-primary-200' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}>
+                            <div onClick={() => handleTimestampClick(subtitle.startTime)} className={`w-16 text-right font-mono text-xs cursor-pointer ${index === activeWordIndex ? 'text-primary-600 font-bold' : 'text-gray-400'}`}>
+                                {formatTimestamp(subtitle.startTime, 'default')}
                             </div>
-                        )
-                    })}
-                    {subtitles.length === 0 && (
-                        <div className="text-center py-10 text-gray-400 dark:text-gray-500 italic">
-                            No subtitles to display.
+                            <input ref={index === activeWordIndex ? activeWordRef : null} type="text" value={subtitle.word} onChange={(e) => handleWordChange(index, e.target.value)} onFocus={() => setSelectedWordForSearch(subtitle.word)} className="flex-grow px-3 py-1.5 rounded-md border text-sm bg-transparent outline-none focus:ring-2 focus:ring-primary-500" />
                         </div>
-                    )}
+                    ))}
                 </div>
             </div>
 
-            {/* Sidebar Tools */}
-            <div className="md:col-span-1 space-y-4 md:sticky md:top-6 h-fit overflow-y-auto max-h-[calc(100vh-200px)] pb-10">
+            <div className="md:col-span-1 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pb-10">
                 <SearchWidget initialSearchTerm={selectedWordForSearch} />
                 <TextToolsWidget 
-                    onFindTermChange={setFindTerm}
-                    onReplaceTermChange={setReplaceTerm}
-                    onCaseSensitiveChange={setFindCaseSensitive}
+                    onFindTermChange={setFindTerm} 
+                    onReplaceTermChange={setReplaceTerm} 
+                    onCaseSensitiveChange={setFindCaseSensitive} 
                     onReplace={() => {
-                        if (!findTerm) return 0;
-                        const nextIndex = subtitles.findIndex((sub, i) => i > lastReplacedIndex && foundIndices.includes(i));
-                        if (nextIndex !== -1) {
-                            const updatedSubtitles = [...subtitles];
-                            const originalWord = updatedSubtitles[nextIndex].word;
-                            const regex = new RegExp(findTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), findCaseSensitive ? 'g' : 'gi');
-                            updatedSubtitles[nextIndex].word = originalWord.replace(regex, replaceTerm);
-                            setSubtitles(updatedSubtitles);
-                            setLastReplacedIndex(nextIndex);
-                            return 1;
+                        const nextIdx = subtitles.findIndex((s, i) => i > lastReplacedIndex && foundIndices.includes(i));
+                        if (nextIdx !== -1) {
+                            const newSubs = [...subtitles];
+                            newSubs[nextIdx].word = newSubs[nextIdx].word.replace(new RegExp(findTerm, findCaseSensitive ? 'g' : 'gi'), replaceTerm);
+                            setSubtitles(newSubs); setLastReplacedIndex(nextIdx); return 1;
                         }
-                        return 0; 
+                        return 0;
                     }}
                     onReplaceAll={() => {
-                         if (!findTerm) return 0;
-                        let count = 0;
-                        const regex = new RegExp(findTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), findCaseSensitive ? 'g' : 'gi');
-                        const updatedSubtitles = subtitles.map(subtitle => {
-                            if (foundIndices.includes(subtitles.indexOf(subtitle))) {
-                                const newWord = subtitle.word.replace(regex, replaceTerm);
-                                if (newWord !== subtitle.word) {
-                                    count++;
-                                }
-                                return { ...subtitle, word: newWord };
-                            }
-                            return subtitle;
-                        });
-                        setSubtitles(updatedSubtitles);
-                        return count;
+                        const regex = new RegExp(findTerm, findCaseSensitive ? 'g' : 'gi');
+                        setSubtitles(subtitles.map(s => ({ ...s, word: s.word.replace(regex, replaceTerm) })));
+                        return foundIndices.length;
                     }}
-                    onCaseChange={(caseType) => {
-                        const newSubtitles = subtitles.map(s => ({ ...s, word: caseType(s.word) }));
-                        setSubtitles(newSubtitles);
-                    }}
+                    onCaseChange={(fn) => setSubtitles(subtitles.map(s => ({ ...s, word: fn(s.word) })))}
                 />
                 
-                <SRTSettings
-                    maxChars={maxChars}
-                    setMaxChars={setMaxChars}
-                    minDuration={minDuration}
-                    setMinDuration={setMinDuration}
-                    gapFrames={gapFrames}
-                    setGapFrames={setGapFrames}
-                    lines={lines}
-                    setLines={setLines}
-                    removeBrackets={removeBrackets}
-                    setRemoveBrackets={setRemoveBrackets}
+                <SRTSettings 
+                    maxChars={maxChars} setMaxChars={setMaxChars}
+                    minDuration={minDuration} setMinDuration={setMinDuration}
+                    gapFrames={gapFrames} setGapFrames={setGapFrames}
+                    lines={lines} setLines={setLines}
+                    wordsPerCaption={wordsPerCaption} setWordsPerCaption={setWordsPerCaption}
+                    removeBrackets={removeBrackets} setRemoveBrackets={setRemoveBrackets}
                 />
 
                 <div className="p-4 border dark:border-gray-600 rounded-lg space-y-4 bg-gray-50 dark:bg-gray-700/50">
-                    <div>
-                        <h3 className="font-semibold mb-3 text-gray-800 dark:text-white">Actions</h3>
-                        <div className="space-y-2">
-                            {shouldShowRomanizeButton && (
-                                <button
-                                    onClick={handleRomanize}
-                                    disabled={isTranslating || hasBeenRomanized}
-                                    className="w-full flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-300 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-green-500 dark:hover:bg-green-600 dark:focus:ring-green-800"
-                                    title={hasBeenRomanized ? "Text has already been Romanized" : "Convert text to English characters (e.g., नमस्ते -> namaste)"}
-                                >
-                                    {isTranslating ? (
-                                        <>
-                                            <SpinnerIcon className="w-4 h-4 mr-2 animate-spin" />
-                                            Converting...
-                                        </>
-                                    ) : 'Romanize'}
+                    <h3 className="font-semibold text-gray-800 dark:text-white">Actions</h3>
+                    <div className="space-y-2">
+                        {!isEnglish && (
+                            <>
+                                <button onClick={handleRomanize} disabled={isProcessing} className="w-full flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg disabled:opacity-50">
+                                    {isProcessing ? <SpinnerIcon className="w-4 h-4 mr-2 animate-spin" /> : 'Romanize'}
                                 </button>
-                            )}
-                            <button onClick={onRestart} className="w-full px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-300 dark:bg-gray-500 dark:hover:bg-gray-600 dark:focus:ring-gray-800">Start Over</button>
-                        </div>
+                                <button onClick={handleTranslate} disabled={isProcessing} className="w-full flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg disabled:opacity-50">
+                                    {isProcessing ? <SpinnerIcon className="w-4 h-4 mr-2 animate-spin" /> : 'Translate to English'}
+                                </button>
+                            </>
+                        )}
+                        <button onClick={onRestart} className="w-full px-4 py-2 text-sm text-white bg-gray-600 rounded-lg">Start Over</button>
                     </div>
 
-                    <div>
-                        <h3 className="font-semibold mb-3 text-gray-800 dark:text-white">Export</h3>
-                        <div className="grid grid-cols-2 gap-2">
-                            <button onClick={() => handleDownload('srt')} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 focus:ring-4 focus:outline-none focus:ring-primary-300 dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800">.srt</button>
-                            <button onClick={() => handleDownload('txt')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.txt</button>
-                            <button onClick={() => handleDownload('csv')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.csv</button>
-                            <button onClick={() => handleDownload('json')} className="px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">.json</button>
-                        </div>
-                        <button onClick={() => handleDownload('prtranscript')} className="mt-2 w-full px-4 py-2 text-sm font-medium text-gray-900 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">Premiere Pro .prtranscript</button>
+                    <h3 className="font-semibold text-gray-800 dark:text-white">Export</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                        {['srt', 'txt', 'csv', 'json'].map(fmt => (
+                            <button key={fmt} onClick={() => handleDownload(fmt as ExportFormat)} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700">.{fmt}</button>
+                        ))}
                     </div>
                 </div>
             </div>
